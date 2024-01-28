@@ -1,80 +1,15 @@
 
 # Streamlit
 import streamlit as st
+import streamlit_authenticator as stauth
 
 # Mistral AI
 from mistralai.client import MistralClient
 from mistralai.models.chat_completion import ChatMessage
 
-# General
-import hmac
-
 # -----------------------------------------------------------------------------
 
-def ask_mistral(msgs):
-    # Messages
-    messages = [ ChatMessage(role="user", content=txt) for txt in msgs ]
-    # No streaming
-    model= "mistral-tiny"
-    chat_response = client.chat(model=model, messages=messages,
-                                max_tokens=None, temperature=0.7,
-                                top_p=None, safe_prompt=False, random_seed=None)
-    return chat_response
-
-# Update
-def update(*args):
-    if args[0] in ("prompt", "ask", ):
-        # Get and clear prompt
-        txt = st.session_state.prompt
-        st.session_state.prompt = ""
-        # Process
-        if not (txt is None or txt==''):
-            # Clean
-            txt = txt.strip()
-            # Update messages
-            st.session_state.messages.append(txt)
-            # Ask Mistral AI
-            chat_response = ask_mistral(st.session_state.messages)
-            # Response
-            r = [ c.message.content for c in chat_response.choices ]
-            # Update history
-            st.session_state.history.append(('R', '\n'.join(r)))
-            st.session_state.history.append(('Q', txt))
-
-def check_password():
-
-    """Returns `True` if the user had the correct password."""
-
-    def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store the password.
-        else:
-            st.session_state["password_correct"] = False
-
-    # Return True if the password is validated.
-    if st.session_state.get("password_correct", False):
-        return True
-
-    # Show input for password.
-    st.text_input("Password", type="password", on_change=password_entered, key="password")
-    if "password_correct" in st.session_state:
-        st.error("😕 Password incorrect")
-
-    return False
-
-# -----------------------------------------------------------------------------
-
-# Very basic security check...
-if not check_password():
-    # Do not continue if check_password is not True
-    st.stop()
-
-# Mistral AI Client
-client = MistralClient(api_key=st.secrets.api_key)
-
-# Configuration
+# Page configuration
 st.set_page_config(
     page_title="Mistral AI",
     page_icon=":gear:",
@@ -83,12 +18,50 @@ st.set_page_config(
     menu_items={}
 )
 
+# import yaml
+# from yaml.loader import SafeLoader
+# with open('../config.yaml') as file:
+#     config = yaml.load(file, Loader=SafeLoader)
+
+# hashed_passwords = stauth.Hasher(['abc']).generate()
+# print(hashed_passwords)
+
+# Basic config for authenticator
+config = {
+            'cookie': {'expiry_days': 1, 'key': st.secrets.auth_token_key, 'name': 'auth_token'},
+            'credentials': {'usernames': {'guest': {'email': '', 'logged_in': False, 'name': 'Guest', 'password': st.secrets.password }}},
+            'preauthorized': {'emails': []}
+         }
+
+# Authenticator
+authenticator = stauth.Authenticate(
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days'],
+    config['preauthorized']
+)
+
+# Title
+st.title(":gear: Mistral AI Chat")
+
+# Login
+authenticator.login()
+if not st.session_state["authentication_status"]:
+    if st.session_state["authentication_status"] is False:
+        st.error('Username/password is incorrect')
+    st.stop()
+
 # Session state
+# Mistral AI Client
+if not 'client' in st.session_state:
+    st.session_state.client = MistralClient(api_key=st.secrets.api_key)
+# History
 if not 'history' in st.session_state:
     st.session_state.history = []
-if not 'messages' in st.session_state:
-    st.session_state.messages = []
+# Model
 if not 'models' in st.session_state:
+    client = st.session_state.client
     list_models_response = client.list_models()
     models = [ d.id for d in list_models_response.data ]
     if 'mistral-tiny' in models:
@@ -96,39 +69,61 @@ if not 'models' in st.session_state:
         models.insert(0, 'mistral-tiny')
     st.session_state.models = models
 
-# Title
-st.title(":gear: Mistral AI Chat")
-
-# Prompt
-### st.text_input("Ask for anything...", value=None, key="prompt", on_change=update, args=('prompt',), disabled=False)
-st.text_input("Ask for anything...", value=None, placeholder="Talk to me...", key="prompt", disabled=False)
-
-col1, col2 = st.columns([1, 1])
+# Model parameters
+st.write('**Mistral AI model parameters**')
+col1, col2, col3, col4 = st.columns([3, 3, 1, 1])
+# Models
 with col1:
-    # Ask button
-    st.button("Ask", type="primary", key="ask", on_click=update, args=("ask", ))
+    st.selectbox('Model ([info](https://mistral.ai/news/la-plateforme/))', st.session_state.models, index=0, key='model')
+# Temperature slider
 with col2:
-    # Clear button
+    st.slider('Temperature', 0.0, 1.0, 0.7, 0.01, key='temperature')
+# Clear button
+with col3:
     if st.button("Restart", type="secondary"):
         st.session_state.history = []
-        st.session_state.messages = []
+# Logout
+with col4:
+    authenticator.logout()
+st.divider()
 
 # Discussion
-for t, msg in st.session_state.history[::-1]:
+for t, msg in st.session_state.history:
     if t=='Q':
-        st.write(f':blue[**{msg}**]')
+        with st.chat_message("user"):
+            st.write(f':blue[**{msg}**]')
     else:
-        st.write(f'{msg}')
+        with st.chat_message("ai"):
+            st.write(f'{msg}')
 
-# Model parameters
-st.divider()
-st.write('**Mistral AI model parameters**')
-col3, col4 = st.columns([1, 1])
-with col3:
-    # Models
-    model = st.selectbox('Model', st.session_state.models, index=0, key='model')
-with col4:
-    # Temperature slider
-    temperature = st.slider('Temperature', 0.0, 1.0, 0.7, 0.01, key='temperature')
+# Prompt
+if prompt := st.chat_input("Ask for anything..."):
+    if not (prompt is None or prompt==''):
+        # Clean
+        prompt = prompt.strip()
+        with st.chat_message("user"):
+            st.write(f':blue[**{prompt}**]')
+        # History
+        st.session_state.history.append(('Q', prompt))
+        # Messages
+        history = [ h[1] for h in st.session_state.history if h[0]=='Q' ]
+        messages = [ ChatMessage(role="user", content=msg) for msg in history ]
+        # Chat with streaming
+        model = st.session_state.model
+        temperature = st.session_state.temperature
+        client = st.session_state.client
+        chat_stream = client.chat_stream(model=model, messages=messages,
+                                        max_tokens=None, temperature=temperature,
+                                        top_p=None, safe_prompt=False, random_seed=None)
+        # Response
+        with st.chat_message("ai"):
+            message_placeholder = st.empty()
+            response =''
+            for chunk in chat_stream:
+                response += chunk.choices[0].delta.content
+                message_placeholder.write(response + "▌")
+            message_placeholder.write(response)
+        # Update history
+        st.session_state.history.append(('R', response))
 
 # -----------------------------------------------------------------------------
